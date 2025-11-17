@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Продажи — фильтр</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-datepicker@1.10.0/dist/css/bootstrap-datepicker.min.css" rel="stylesheet">
+<style>
+body { padding:20px; display:flex; flex-direction:column; height:100vh; }
+.scroll-table { flex-grow:1; overflow-y:auto; border:1px solid #dee2e6; border-radius:.5rem; max-height:70vh; }
+#data-table thead th { position:sticky; top:0; background:#f8f9fa; z-index:2; }
+#data-table thead tr.filter-row th { position:sticky; top:36px; background:#fff; z-index:1; }
+th { cursor:pointer; user-select:none; white-space:nowrap; }
+#data-table thead tr.filter-row input { width:100%; font-size:12px; padding:2px 4px; }
+
+.multi-select {
+  display:flex; flex-wrap:wrap; align-items:center;
+  padding:4px; border:1px solid #ced4da; border-radius:.5rem; min-height:44px;
+  cursor:text; position:relative; background:#fff;
+  transition:border-color .2s, box-shadow .2s;
+}
+.multi-select:focus-within { border-color:#0d6efd; box-shadow:0 0 0 .2rem rgba(13,110,253,.25); }
+.multi-select .tag {
+  display:flex; align-items:center; background:#0d6efd; color:white; padding:4px 6px;
+  border-radius:.25rem; margin:2px; font-size:.85rem; max-width:220px; min-width:60px;
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+}
+.multi-select .tag .remove { cursor:pointer; margin-left:6px; font-weight:bold; transition:color .2s; flex-shrink:0; }
+.multi-select .tag .remove:hover { color:#ffdddd; }
+.multi-select input.input-multi { border:none; outline:none; flex-grow:1; min-width:120px; padding:4px; margin:2px; }
+.multi-select .dropdown-list {
+  display:none; max-height:200px; overflow-y:auto; border:1px solid #ced4da;
+  border-radius:.25rem; background:#fff; position:absolute; top:100%; left:0; width:100%; z-index:1050;
+  box-shadow:0 2px 12px rgba(0,0,0,0.15);
+}
+.multi-select .dropdown-item { padding:6px 10px; cursor:pointer; transition:background-color .2s,color .2s; }
+.multi-select .dropdown-item:hover { background-color:#0d6efd; color:white; border-radius:.25rem; }
+
+#loader-overlay {
+  display:none;
+  position:fixed; top:0; left:0; width:100%; height:100%;
+  background:rgba(255,255,255,0.8);
+  z-index:9999; align-items:center; justify-content:center;
+  flex-direction:column;
+  transition: opacity .3s ease;
+}
+.spinner {
+  border:6px solid #eee; border-top:6px solid #007bff;
+  border-radius:50%; width:60px; height:60px;
+  animation:spin 1s linear infinite;
+}
+@keyframes spin { 0%{transform:rotate(0);} 100%{transform:rotate(360deg);} }
+.loader-text { margin-top:10px; font-size:1.1rem; color:#007bff; font-weight:500; }
+</style>
+</head>
+<body>
+
+<h3>📊 Просмотр продаж 
+  <small class="text-muted" id="last-update">(загрузка...)</small>
+</h3>
+
+<p style="color:#8B0000; font-weight:500; margin-top:4px;">
+  База SQL обновляется ежедневно в период с 11:00 до 11:30
+</p>
+
+<form id="filter-form" class="row g-3 mb-2">
+  <div class="col-md-3"><div class="multi-select" id="inn-select"><input type="text" class="input-multi form-control" placeholder="ИНН"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="region-select"><input type="text" class="input-multi form-control" placeholder="Код региона"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="client-select"><input type="text" class="input-multi form-control" placeholder="Клиент"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="number-select"><input type="text" class="input-multi form-control" placeholder="Номер"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="code-select"><input type="text" class="input-multi form-control" placeholder="Код"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="item-select"><input type="text" class="input-multi form-control" placeholder="Номенклатура"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="gau-select"><input type="text" class="input-multi form-control" placeholder="ГАУ"><div class="dropdown-list"></div></div></div>
+  <div class="col-md-3"><div class="multi-select" id="gau-group-select"><input type="text" class="input-multi form-control" placeholder="ГАУ.Группа"><div class="dropdown-list"></div></div></div>
+
+  <div class="col-md-3"><input type="text" class="form-control datepicker" id="date-from" placeholder="Дата с"></div>
+  <div class="col-md-3"><input type="text" class="form-control datepicker" id="date-to" placeholder="Дата по"></div>
+
+  <div class="col-md-3">
+    <button type="submit" class="btn btn-primary">Применить</button>
+    <button type="button" id="reset-btn" class="btn btn-secondary">Сброс</button>
+    <button type="button" id="export-btn" class="btn btn-success">📥 Excel</button>
+  </div>
+</form>
+
+<div class="scroll-table mt-2">
+  <table class="table table-striped table-sm" id="data-table">
+    <thead>
+      <tr id="header-row"></tr>
+      <tr class="filter-row"></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<nav class="mt-2"><ul class="pagination justify-content-center" id="pagination"></ul></nav>
+
+<div id="loader-overlay">
+  <div class="spinner"></div>
+  <div class="loader-text">Загрузка данных...</div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap-datepicker@1.10.0/dist/js/bootstrap-datepicker.min.js"></script>
+
+<script>
+const COLUMN_ORDER = {{ column_order|tojson }};
+const FIELDS = {{ fields|tojson }};
+
+// ----------------- debounce -----------------
+function debounce(func, wait){ let timeout; return function(...args){ clearTimeout(timeout); timeout=setTimeout(()=>func.apply(this,args), wait); }; }
+
+// ----------------- multi-select -----------------
+function setupMultiSelect(containerSelector, fieldName){
+  const container=$(containerSelector), input=container.find("input.input-multi");
+  let selected=[];
+
+  function renderTags(){
+    container.find(".tag").remove();
+    selected.forEach(v=>{
+      const tag=$(`<span class='tag' data-value='${v}'><span class='text'>${v}</span><span class='remove'>&times;</span></span>`);
+      tag.find(".remove").click(()=>{
+        selected.splice(selected.indexOf(v),1); renderTags(); fetchData(1); updateAllDropdowns(); saveFiltersToLocalStorage();
+      });
+      tag.insertBefore(input);
+    });
+    window.linkedValues[fieldName]=selected;
+    updateAllDropdowns();
+  }
+
+  const loadDropdownDebounced=debounce(function(filter=""){
+    const params={q:filter};
+    // отправляем текущие связанные значения, чтобы БД могла учесть зависимость
+    Object.keys(window.linkedValues).forEach(k=>{
+      if(window.linkedValues[k] && window.linkedValues[k].length){
+        params[k+'[]']=window.linkedValues[k];
+      }
+    });
+    $.get("/autocomplete/"+fieldName,params,function(data){
+      const dropdown=container.find(".dropdown-list");
+      dropdown.empty();
+      data.forEach(item=>{
+        if(!selected.includes(item)){
+          const div=$(`<div class='dropdown-item'>${item}</div>`);
+          div.on("mousedown",function(e){
+            e.preventDefault();
+            if(!selected.includes(item)){ selected.push(item); renderTags(); }
+            input.val("").blur(); dropdown.hide(); fetchData(1); saveFiltersToLocalStorage();
+          });
+          dropdown.append(div);
+        }
+      });
+      dropdown.toggle(data.length>0);
+    });
+  },250);
+
+  input.on("focus",()=>loadDropdownDebounced());
+  input.on("input",()=>loadDropdownDebounced(input.val()));
+  input.on("keydown",e=>{
+    if(e.key==="Enter" && input.val().trim()){
+      const val=input.val().trim();
+      if(!selected.includes(val)){ selected.push(val); renderTags(); }
+      input.val("").blur(); fetchData(1); saveFiltersToLocalStorage(); e.preventDefault();
+    } else if(e.key==="Backspace" && !input.val() && selected.length){
+      selected.pop(); renderTags(); fetchData(1); saveFiltersToLocalStorage();
+    }
+  });
+  $(document).on("click",e=>{
+    if(!container.is(e.target) && container.has(e.target).length===0){
+      container.find(".dropdown-list").hide(); input.val("");
+    }
+  });
+
+  // публичные методы
+  return {
+    get:()=>selected,
+    setSelected:(arr)=>{
+      selected = Array.isArray(arr) ? arr.slice() : [];
+      renderTags();
+    },
+    clearAll:()=>{ selected.length=0; input.val(""); container.find(".tag").remove(); container.find(".dropdown-list").hide(); window.linkedValues[fieldName]=[]; updateAllDropdowns(); saveFiltersToLocalStorage(); }
+  };
+}
+
+// создаём все селекты
+window.linkedValues = {};
+const innSelect=setupMultiSelect("#inn-select","doc_counterparty_inn");
+const clientSelect=setupMultiSelect("#client-select","doc_counterparty_full_name");
+const numberSelect=setupMultiSelect("#number-select","doc_number");
+const codeSelect=setupMultiSelect("#code-select","inside_doc_item_code");
+const itemSelect=setupMultiSelect("#item-select","inside_doc_item_name");
+const gauSelect=setupMultiSelect("#gau-select","Номенклатура.ГАУ");
+const gauGroupSelect=setupMultiSelect("#gau-group-select","Номенклатура.ГАУ.Группа");
+const regionSelect=setupMultiSelect("#region-select","region_code");
+const allSelects=[innSelect,clientSelect,numberSelect,codeSelect,itemSelect,gauSelect,gauGroupSelect,regionSelect];
+
+$('.datepicker').datepicker({format:'yyyy-mm-dd',autoclose:true,todayHighlight:true});
+$('#date-from,#date-to').on('changeDate',()=>{ fetchData(1); saveFiltersToLocalStorage(); });
+
+// ----------------- loader -----------------
+function showLoader(){ $("#loader-overlay").css("display","flex").css("opacity",1); }
+function hideLoader(){ $("#loader-overlay").fadeOut(250); }
+
+// ----------------- fetchData -----------------
+let currentPage=1, totalPages=1, sortCol="Дата", sortDir="desc";
+
+function fetchData(page=1){
+  showLoader();
+  currentPage=page;
+  const params={};
+  allSelects.forEach(s=>{
+    // определить ключ по значению (linkedValues хранит массивы по полям)
+    // s.get() возвращает массив; нам нужно найти соответствующее имя поля
+  });
+  // собираем параметры вручную
+  Object.keys(window.linkedValues).forEach(k=>{
+    const arr = window.linkedValues[k];
+    if(arr && arr.length){
+      arr.forEach(v=>{
+        if(!params[k+'[]']) params[k+'[]']=[];
+        params[k+'[]'].push(v);
+      });
+    }
+  });
+  if($('#date-from').val()) params.date_from=$('#date-from').val();
+  if($('#date-to').val()) params.date_to=$('#date-to').val();
+  params.page=currentPage; params.sort_col=sortCol; params.sort_dir=sortDir;
+
+  $.get("/data",params,function(res){
+    const data=res.data || [];
+    totalPages=res.total_pages||1;
+    if(!data.length){ $("#data-table tbody").html("<tr><td colspan='"+COLUMN_ORDER.length+"'>Нет данных</td></tr>"); hideLoader(); return; }
+    $("#header-row").html(COLUMN_ORDER.map(h=>`<th data-col='${h}'>${h}${h===sortCol?(sortDir==='asc'?' ▲':' ▼'):''}</th>`).join(""));
+    $("#data-table tbody").html(data.map(r=>"<tr>"+COLUMN_ORDER.map(h=>`<td>${r[h]??''}</td>`).join("")+"</tr>").join(""));
+    renderPagination(currentPage,totalPages);
+    hideLoader();
+  }).fail(function(){ hideLoader(); });
+}
+
+// ----------------- pagination -----------------
+function renderPagination(currentPage,totalPages){
+  const $p=$("#pagination").empty();
+  if(totalPages<=1) return;
+  const maxVisible=2;
+  const pageBtn=(p,label=p,active=false)=>`<li class='page-item ${active?'active':''}'><a class='page-link' href='#' onclick='fetchData(${p})'>${label}</a></li>`;
+  let html="";
+  html+=pageBtn(1,"1",currentPage===1);
+  if(currentPage-maxVisible>2) html+="<li class='page-item disabled'><span class='page-link'>...</span></li>";
+  for(let i=Math.max(2,currentPage-maxVisible); i<=Math.min(totalPages-1,currentPage+maxVisible); i++) html+=pageBtn(i,i,currentPage===i);
+  if(currentPage+maxVisible<totalPages-1) html+="<li class='page-item disabled'><span class='page-link'>...</span></li>";
+  if(totalPages>1) html+=pageBtn(totalPages,totalPages,currentPage===totalPages);
+  $p.html(`<li class='page-item ${currentPage===1?'disabled':''}'><a class='page-link' href='#' onclick='fetchData(${currentPage-1})'>Назад</a></li>`+html+`<li class='page-item ${currentPage===totalPages?'disabled':''}'><a class='page-link' href='#' onclick='fetchData(${currentPage+1})'>Вперёд</a></li>`);
+}
+
+// ----------------- form actions -----------------
+$("#filter-form").on("submit",e=>{ e.preventDefault(); fetchData(1); saveFiltersToLocalStorage(); });
+$("#reset-btn").on("click",()=>{
+  $("#filter-form")[0].reset();
+  allSelects.forEach(s=>s.clearAll());
+  $('#date-from,#date-to').datepicker('clearDates');
+  currentPage=1; fetchData(1); saveFiltersToLocalStorage();
+});
+$("#export-btn").on("click",()=>{
+  const form=$("<form></form>");
+  Object.keys(window.linkedValues).forEach(k=>{
+    window.linkedValues[k].forEach(v=>{
+      form.append(`<input type='hidden' name='${k}[]' value='${v}'>`);
+    });
+  });
+  if($('#date-from').val()) form.append(`<input type='hidden' name='date_from' value='${$('#date-from').val()}'>`);
+  if($('#date-to').val()) form.append(`<input type='hidden' name='date_to' value='${$('#date-to').val()}'>`);
+  const query = form.serialize();
+  window.open("/export?"+query,"_blank");
+});
+
+// ----------------- sorting -----------------
+$(document).on("click","th[data-col]",function(){ const c=$(this).data("col"); if(c){ sortCol=c; sortDir=(sortDir==='asc'?'desc':'asc'); fetchData(1); } });
+
+// ----------------- last update -----------------
+function updateLastDate() {
+  $.get("/last_update", function(res) {
+    const $el = $("#last-update");
+
+    // Разбираем дату из ответа
+    const lastUpdate = new Date(res.last_update);
+
+    // Вычитаем один день
+    const prevDate = new Date(lastUpdate);
+    prevDate.setDate(prevDate.getDate() - 1);
+
+    // Форматируем дату в YYYY-MM-DD
+    const formattedPrevDate = prevDate.toISOString().split("T")[0];
+
+    const newText = `(Последнее обновление: ${res.last_update}) (созданные документы на ${formattedPrevDate}, включительно)`;
+
+    if ($el.text() !== newText) {
+      $el
+        .text(newText)
+        .css("transition", "background-color .5s")
+        .css("background-color", "#ffff99");
+      setTimeout(() => {
+        $el.css("background-color", "transparent");
+      }, 1500);
+    }
+  });
+}
+updateLastDate();
+const origFetch = fetchData;
+fetchData = function(page=1){ origFetch(page); updateLastDate(); };
+
+// ----------------- update dropdowns when selections change -----------------
+function updateAllDropdowns(){
+  // вызываем автодополнения для открытых dropdown'ов (если нужно)
+  // (в данном примере dropdown'ы загружаются при фокусе/вводе)
+}
+
+// ----------------- localStorage: save / load -----------------
+const LOCAL_KEY = "sales_filters_v1";
+
+function saveFiltersToLocalStorage(){
+  const obj = {};
+  Object.keys(window.linkedValues).forEach(k=>{
+    obj[k] = window.linkedValues[k] || [];
+  });
+  obj.date_from = $('#date-from').val() || "";
+  obj.date_to = $('#date-to').val() || "";
+  try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(obj)); }catch(e){}
+}
+
+function loadFiltersFromLocalStorage(){
+  try{
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if(!raw) return;
+    const obj = JSON.parse(raw);
+    if(!obj) return;
+    // restore multi-selects
+    const mapFieldToSelect = {
+      "doc_counterparty_inn": innSelect,
+      "doc_counterparty_full_name": clientSelect,
+      "doc_number": numberSelect,
+      "inside_doc_item_code": codeSelect,
+      "inside_doc_item_name": itemSelect,
+      "Номенклатура.ГАУ": gauSelect,
+      "Номенклатура.ГАУ.Группа": gauGroupSelect,
+      "region_code": regionSelect
+    };
+    Object.keys(mapFieldToSelect).forEach(field=>{
+      if(obj[field] && Array.isArray(obj[field])){
+        mapFieldToSelect[field].setSelected(obj[field]);
+      }
+    });
+    if(obj.date_from) $('#date-from').datepicker('update', obj.date_from);
+    if(obj.date_to) $('#date-to').datepicker('update', obj.date_to);
+  }catch(e){
+    console.warn("Не удалось загрузить фильтры из localStorage", e);
+  }
+}
+
+// ----------------- initial load -----------------
+$(function(){
+  // restore from localStorage first
+  loadFiltersFromLocalStorage();
+  fetchData(1);
+});
+
+</script>
+</body>
+</html>
