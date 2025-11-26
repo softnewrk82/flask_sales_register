@@ -364,41 +364,99 @@ def export_excel(conn):
 @app.route("/autocomplete/<field>")
 @safe_db_call
 def autocomplete(conn, field):
-    # разрешённые поля: FIELDS и region_code, Дата
+    # проверяем допустимые поля
     if field not in FIELDS and field not in ["region_code", "Дата"]:
         return jsonify([])
 
     q = request.args.get("q", "").strip()
-    # кэш ключ собираем из всех параметров (чтобы учитывать зависимость от других выбранных фильтров)
     cache_key = get_cache_key(field, request.args)
     cached = get_from_cache(cache_key)
-    if cached is not None:
+    if cached:
         return jsonify(cached)
 
-    # Если поле — region_code, возвращаем формат "77 — Москва" и учитываем q
+    res = []
+
     if field == "region_code":
-        filtered = []
-        for code, name in REGION_MAP.items():
-            text = f"{code} — {name}"
-            if not q or q.lower() in text.lower():
-                filtered.append(text)
-        set_to_cache(cache_key, filtered[:50])
-        return jsonify(filtered[:50])
+        # Собираем фильтры для остальных полей
+        filters, values = [], []
+        for f in FIELDS:
+            vals = request.args.getlist(f + '[]')
+            if vals:
+                filters.append(f'"{f}" = ANY(%s)')
+                values.append(vals)
 
-    # Для остальных полей учитываем уже выбранные фильтры (в т.ч. region_code[] в формате "77 — Москва")
-    where_clause, values = build_filter_query(request.args)
+        # date_from / date_to
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
+        if date_from:
+            filters.append('"Дата" >= %s')
+            values.append(date_from)
+        if date_to:
+            filters.append('"Дата" <= %s')
+            values.append(date_to)
 
-    cur = conn.cursor()
-    extra = ""
-    if q:
-        extra = f'AND "{field}" ILIKE %s'
-        values.append(f"%{q}%")
-    sql = f'SELECT DISTINCT "{field}" FROM intermediate_scheme.sbis_coll_sell_upd_for_flask {where_clause} {extra} ORDER BY "{field}" LIMIT 50'
-    cur.execute(sql, values)
-    res = [r[0] for r in cur.fetchall() if r[0]]
-    cur.close()
+        # Запрос: выбираем только ИНН, чтобы определить доступные регионы
+        where_clause = " WHERE " + " AND ".join(filters) if filters else ""
+        cur = conn.cursor()
+        cur.execute(f'''
+            SELECT DISTINCT COALESCE(NULLIF(regexp_replace(SUBSTRING("doc_counterparty_inn" FROM 1 FOR 2), '[^0-9]', '', 'g'), '')::int, 0)
+            FROM intermediate_scheme.sbis_coll_sell_upd_for_flask
+            {where_clause}
+        ''', values)
+        region_codes_in_db = [r[0] for r in cur.fetchall() if r[0]]
+        cur.close()
+
+        for code in region_codes_in_db:
+            name = REGION_MAP.get(code, "Неизвестный регион")
+            label = f"{code} — {name}"
+            if not q:
+                res.append(label)
+            else:
+                if q.isdigit() and str(code).startswith(q):
+                    res.append(label)
+                elif not q.isdigit() and q.lower() in name.lower():
+                    res.append(label)
+
+        res = sorted(res, key=lambda x: int(x.split("—")[0].strip()))
+    else:
+        # Стандартная логика для остальных полей с учётом всех фильтров
+        filters, values = [], []
+        for f in FIELDS:
+            vals = request.args.getlist(f+'[]')
+            if vals and f != field:
+                filters.append(f'"{f}" = ANY(%s)')
+                values.append(vals)
+
+        # region_code[] в качестве фильтра
+        region_codes = parse_region_codes_from_params(request.args)
+        if region_codes:
+            filters.append(
+                'COALESCE(NULLIF(regexp_replace(SUBSTRING("doc_counterparty_inn" FROM 1 FOR 2), \'[^0-9]\', \'\', \'g\'), \'\')::int, 0) = ANY(%s)'
+            )
+            values.append(region_codes)
+
+        # date_from / date_to
+        if request.args.get("date_from"):
+            filters.append('"Дата">=%s')
+            values.append(request.args["date_from"])
+        if request.args.get("date_to"):
+            filters.append('"Дата"<=%s')
+            values.append(request.args["date_to"])
+
+        if q:
+            filters.append(f'"{field}" ILIKE %s')
+            values.append(f"%{q}%")
+        where_clause = " WHERE " + " AND ".join(filters) if filters else ""
+
+        cur = conn.cursor()
+        cur.execute(f'SELECT DISTINCT "{field}" FROM intermediate_scheme.sbis_coll_sell_upd_for_flask {where_clause} ORDER BY "{field}" LIMIT 50', values)
+        res = [r[0] for r in cur.fetchall() if r[0]]
+        cur.close()
+
     set_to_cache(cache_key, res)
     return jsonify(res)
+
+
 
 @app.route("/last_update")
 @safe_db_call
