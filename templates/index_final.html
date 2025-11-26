@@ -21,11 +21,42 @@ th { cursor:pointer; user-select:none; white-space:nowrap; }
 }
 .multi-select:focus-within { border-color:#0d6efd; box-shadow:0 0 0 .2rem rgba(13,110,253,.25); }
 .multi-select .tag {
-  display:flex; align-items:center; background:#0d6efd; color:white; padding:4px 6px;
-  border-radius:.25rem; margin:2px; font-size:.85rem; max-width:220px; min-width:60px;
-  overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+  display: inline-flex;
+  align-items: center;
+
+  background: #0d6efd;
+  color: white;
+
+  padding: 4px 6px;
+  border-radius: .25rem;
+  margin: 2px;
+
+  max-width: 200px;         /* ширина видимого текста — можно менять */
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
 }
-.multi-select .tag .remove { cursor:pointer; margin-left:6px; font-weight:bold; transition:color .2s; flex-shrink:0; }
+
+.multi-select .tag .text {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 22px;       /* место под крестик */
+}
+
+/* .multi-select .tag .remove { cursor:pointer; margin-left:6px; font-weight:bold; transition:color .2s; flex-shrink:0; } *//
+.multi-select .tag .remove {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  cursor: pointer;
+  font-weight: bold;
+  flex-shrink: 0;
+
+  background: transparent;
+}
 .multi-select .tag .remove:hover { color:#ffdddd; }
 .multi-select input.input-multi { border:none; outline:none; flex-grow:1; min-width:120px; padding:4px; margin:2px; }
 .multi-select .dropdown-list {
@@ -118,7 +149,12 @@ function setupMultiSelect(containerSelector, fieldName){
   function renderTags(){
     container.find(".tag").remove();
     selected.forEach(v=>{
-      const tag=$(`<span class='tag' data-value='${v}'><span class='text'>${v}</span><span class='remove'>&times;</span></span>`);
+      const tag = $(`
+      <span class='tag' data-value='${v}' title='${v}'>
+        <span class='text'>${v}</span>
+        <span class='remove'>&times;</span>
+      </span>
+    `);
       tag.find(".remove").click(()=>{
         selected.splice(selected.indexOf(v),1); renderTags(); fetchData(1); updateAllDropdowns(); saveFiltersToLocalStorage();
       });
